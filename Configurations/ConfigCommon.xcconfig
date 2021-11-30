@@ -11,7 +11,7 @@ SPARKLE_EMBED_INSTALLER_STATUS_XPC_SERVICE = 0
 SPARKLE_EMBED_INSTALLER_CONNECTION_XPC_SERVICE = 0
 
 // Set this to your own prefix if you want to use XPC Service names with different prefix
-XPC_SERVICE_BUNDLE_ID_PREFIX = org.sparkle-project
+XPC_SERVICE_BUNDLE_ID_PREFIX = com.dezinezync.elytra
 
 INSTALLER_CONNECTION_BUNDLE_ID = ${XPC_SERVICE_BUNDLE_ID_PREFIX}.InstallerConnection
 INSTALLER_STATUS_BUNDLE_ID = ${XPC_SERVICE_BUNDLE_ID_PREFIX}.InstallerStatus
