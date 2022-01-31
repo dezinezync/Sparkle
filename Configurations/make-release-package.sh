@@ -48,8 +48,8 @@ if [ "$ACTION" = "" ] ; then
         mkdir -p "$CONFIGURATION_BUILD_DIR/staging/Entitlements"
         mkdir -p "$CONFIGURATION_BUILD_DIR/staging-spm/Entitlements"
         
-        cp -R "$SRCROOT/Downloader/org.sparkle-project.Downloader.entitlements" "$CONFIGURATION_BUILD_DIR/staging/Entitlements"
-        cp -R "$SRCROOT/Downloader/org.sparkle-project.Downloader.entitlements" "$CONFIGURATION_BUILD_DIR/staging-spm/Entitlements"
+        cp -R "$SRCROOT/Downloader/org.sparkle-project.Downloader.entitlements" "$CONFIGURATION_BUILD_DIR/staging/Entitlements/$DOWNLOADER_BUNDLE_ID.entitlements"
+        cp -R "$SRCROOT/Downloader/org.sparkle-project.Downloader.entitlements" "$CONFIGURATION_BUILD_DIR/staging-spm/Entitlements/$DOWNLOADER_BUNDLE_ID.entitlements"
     fi
 
     mkdir -p "$CONFIGURATION_BUILD_DIR/staging/Symbols"
@@ -66,20 +66,20 @@ if [ "$ACTION" = "" ] ; then
         cp -R "$CONFIGURATION_BUILD_DIR/Sparkle.framework.dSYM" "$CONFIGURATION_BUILD_DIR/staging/Symbols"
         cp -R "$CONFIGURATION_BUILD_DIR/Autoupdate.dSYM" "$CONFIGURATION_BUILD_DIR/staging/Symbols"
         cp -R "$CONFIGURATION_BUILD_DIR/Updater.app.dSYM" "$CONFIGURATION_BUILD_DIR/staging/Symbols"
-        cp -R "$CONFIGURATION_BUILD_DIR/org.sparkle-project.InstallerLauncher.xpc.dSYM" "$CONFIGURATION_BUILD_DIR/staging/Symbols"
-        cp -R "$CONFIGURATION_BUILD_DIR/org.sparkle-project.Downloader.xpc.dSYM" "$CONFIGURATION_BUILD_DIR/staging/Symbols"
+        cp -R "$CONFIGURATION_BUILD_DIR/${INSTALLER_LAUNCHER_BUNDLE_ID}.xpc.dSYM" "$CONFIGURATION_BUILD_DIR/staging/Symbols"
+        cp -R "$CONFIGURATION_BUILD_DIR/${DOWNLOADER_BUNDLE_ID}.xpc.dSYM" "$CONFIGURATION_BUILD_DIR/staging/Symbols"
     fi
     cp -R "$CONFIGURATION_BUILD_DIR/staging/bin" "$CONFIGURATION_BUILD_DIR/staging-spm"
     cp -R "$CONFIGURATION_BUILD_DIR/staging/Symbols" "$CONFIGURATION_BUILD_DIR/staging-spm"
 
     cd "$CONFIGURATION_BUILD_DIR/staging"
-    
+
     if [ -x "$(command -v xz)" ]; then
         XZ_EXISTS=1
     else
         XZ_EXISTS=0
     fi
-    
+
     rm -rf "/tmp/sparkle-extract"
     mkdir -p "/tmp/sparkle-extract"
 
@@ -106,7 +106,7 @@ if [ "$ACTION" = "" ] ; then
 
     rm -rf "/tmp/sparkle-extract"
     rm -rf "$CONFIGURATION_BUILD_DIR/staging"
-    
+
     # Generate zip containing the xcframework for SPM
     rm -rf "/tmp/sparkle-spm-extract"
     mkdir -p "/tmp/sparkle-spm-extract"
@@ -118,7 +118,7 @@ if [ "$ACTION" = "" ] ; then
     # This guards against our archives being corrupt / created incorrectly
     ditto -x -k "../Sparkle-for-Swift-Package-Manager.zip" "/tmp/sparkle-spm-extract"
     verify_code_signatures "/tmp/sparkle-spm-extract"
-    
+
     rm -rf "/tmp/sparkle-spm-extract"
     rm -rf "$CONFIGURATION_BUILD_DIR/staging-spm"
 
@@ -134,10 +134,12 @@ if [ "$ACTION" = "" ] ; then
         exit 1
     fi
 
-    # Generate new Package manifest and podspec
+    # Generate new Package manifest, podspec, and carthage files
     cd "$CONFIGURATION_BUILD_DIR"
     cp "$SRCROOT/Package.swift" "$CONFIGURATION_BUILD_DIR"
     cp "$SRCROOT/Sparkle.podspec" "$CONFIGURATION_BUILD_DIR"
+    cp "$SRCROOT/Carthage-dev.json" "$CONFIGURATION_BUILD_DIR"
+    
     if [ "$XCODE_VERSION_MAJOR" -ge "1200" ]; then
         # is equivalent to shasum -a 256 FILE
         spm_checksum=$(swift package compute-checksum "Sparkle-for-Swift-Package-Manager.zip")
@@ -150,16 +152,20 @@ if [ "$ACTION" = "" ] ; then
         echo "Checksum: $spm_checksum"
 
         sed -E -i '' -e "/s\.version.+=/ s/\".+\"/\"$MARKETING_VERSION\"/" "Sparkle.podspec"
+        
+        "$SRCROOT/Configurations/update-carthage.py" "Carthage-dev.json" "$MARKETING_VERSION"
         cp "Sparkle.podspec" "$SRCROOT"
-        echo "Sparkle.podspec updated with following values:"
+        # Note the Carthage-dev.json file will finally be copied to the website repo in Carthage/Sparkle.json in the end
+        cp "Carthage-dev.json" "$SRCROOT"
+        echo "Sparkle.podspec and Carthage-dev.json updated with following values:"
         echo "Version: $MARKETING_VERSION"
     else
         echo "warning: Xcode version $XCODE_VERSION_ACTUAL does not support computing checksums for Swift Packages. Please update the Package manifest manually."
     fi
-    
-    if [ "$XZ_EXISTS" -eq 1 ] ; then
+
+    if [ "$XZ_EXISTS" -ne 1 ] ; then
         echo "WARNING: xz compression is used for official releases but bz2 is being used instead because xz tool is not installed on your system."
     fi
-        
+
     rm -rf "$CONFIGURATION_BUILD_DIR/staging-spm"
 fi
