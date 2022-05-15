@@ -21,9 +21,16 @@
 #import "SUOperatingSystem.h"
 #import "SPUUserUpdateState.h"
 #import "SUErrors.h"
+#import "SPUInstallationType.h"
 #include <time.h>
 
+
 #import <AppKit/AppKit.h>
+
+// The amount of time we wait until the app becomes inactive and active again to show an update prompt at an opportune time.
+static const NSTimeInterval SUScheduledUpdateActiveAppLeewayInterval = DEBUG ? 60.0 * 2 : 30 * 60.0;
+// The amount of time the app is allowed to be idle for us to consider showing an update prompt right away when the app is active
+static const NSTimeInterval SUScheduledUpdateIdleEventLeewayInterval = DEBUG ? 30.0 : 5 * 60.0;
 
 @interface SPUStandardUserDriver ()
 
@@ -48,6 +55,8 @@
 
 @property (nonatomic, readonly) uint64_t initializationTime;
 
+@property (nonatomic) BOOL regularApplicationUpdate;
+
 @end
 
 @implementation SPUStandardUserDriver
@@ -65,6 +74,7 @@
 @synthesize expectedContentLength = _expectedContentLength;
 @synthesize bytesDownloaded = _bytesDownloaded;
 @synthesize initializationTime = _initializationTime;
+@synthesize regularApplicationUpdate = _regularApplicationUpdate;
 
 #pragma mark Birth
 
@@ -105,10 +115,12 @@
 
 #pragma mark Update Alert Focus
 
-- (void)setUpFocusForActiveUpdateAlertAllowingImmediateInstallButtonFocus:(BOOL)allowImmediateInstallButtonFocus
+- (void)setUpActiveUpdateAlertRequestingFocus:(BOOL)requestingFocus
 {
     // Make sure the window is loaded in any case
     [self.activeUpdateAlert window];
+    
+    [self _removeScheduledUpdateAlertAfterDelay];
     
     // If the app is a menubar app or the like, we need to focus it first and alter the
     // update prompt to behave like a normal window. Otherwise if the window were hidden
@@ -118,20 +130,32 @@
         [NSApp activateIgnoringOtherApps:YES];
         
         [self.activeUpdateAlert showWindow:nil];
-        [self.activeUpdateAlert setInstallButtonFocus:allowImmediateInstallButtonFocus];
+        [self.activeUpdateAlert setInstallButtonFocus:requestingFocus];
     } else {
-        // Only show the update alert if the app is active; otherwise, we'll wait until it is.
+        // Only show the update alert if the app is active and if it's an an opportune time; otherwise, we'll wait until the app becomes active and the time is right
         BOOL observeApplicationActiveState;
         if ([NSApp isActive]) {
-            [self.activeUpdateAlert setInstallButtonFocus:allowImmediateInstallButtonFocus];
-            [self.activeUpdateAlert showWindow:nil];
+            // If the system has been inactive for several minutes, allow the update alert to show up immediately. We assume it's likely the user isn't at their computer in this case.
+            CFTimeInterval timeSinceLastEvent;
+            if (!requestingFocus) {
+                timeSinceLastEvent = CGEventSourceSecondsSinceLastEventType(kCGEventSourceStateHIDSystemState, kCGAnyInputEventType);
+            } else {
+                timeSinceLastEvent = 0;
+            }
             
-            // We will set the install focus if the user comes back to the app,
-            // but not for background applications because they re-activate in a strange way
-            observeApplicationActiveState = !allowImmediateInstallButtonFocus;
+            if (requestingFocus || timeSinceLastEvent >= SUScheduledUpdateIdleEventLeewayInterval) {
+                [self.activeUpdateAlert showWindow:nil];
+                [self.activeUpdateAlert setInstallButtonFocus:YES];
+                
+                observeApplicationActiveState = NO;
+            } else {
+                // If the application does not become inactive and active again within a threshold,
+                // we will give up and show the update
+                [self performSelector:@selector(showScheduledUpdateAlertAfterDelay) withObject:nil afterDelay:SUScheduledUpdateActiveAppLeewayInterval];
+                observeApplicationActiveState = YES;
+            }
         } else {
             // We will show the update alert when the user comes back to the app
-            [self.activeUpdateAlert setInstallButtonFocus:YES];
             observeApplicationActiveState = YES;
         }
         
@@ -146,13 +170,23 @@
     [[NSNotificationCenter defaultCenter] removeObserver:self name:NSApplicationDidBecomeActiveNotification object:NSApp];
 }
 
+- (void)_removeScheduledUpdateAlertAfterDelay
+{
+    [[self class] cancelPreviousPerformRequestsWithTarget:self selector:@selector(showScheduledUpdateAlertAfterDelay) object:nil];
+}
+
+- (void)showScheduledUpdateAlertAfterDelay
+{
+    [self.activeUpdateAlert showWindow:nil];
+    [self.activeUpdateAlert setInstallButtonFocus:NO];
+}
+
 - (void)applicationDidBecomeActive:(NSNotification *)__unused aNotification
 {
-    if (self.activeUpdateAlert.window.visible) {
-        [self.activeUpdateAlert setInstallButtonFocus:YES];
-    } else {
-        [self.activeUpdateAlert showWindow:nil];
-    }
+    [self _removeScheduledUpdateAlertAfterDelay];
+    
+    [self.activeUpdateAlert showWindow:nil];
+    [self.activeUpdateAlert setInstallButtonFocus:YES];
     
     [self _removeApplicationBecomeActiveObserver];
 }
@@ -176,6 +210,8 @@
         weakSelf.activeUpdateAlert = nil;
     }];
     
+    self.regularApplicationUpdate = [appcastItem.installationType isEqualToString:SPUInstallationTypeApplication];
+    
     BOOL allowInstallButtonFocus;
     if (state.userInitiated) {
         allowInstallButtonFocus = YES;
@@ -184,13 +220,13 @@
             uint64_t currentTime = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
             uint64_t timeElapsedSinceInitialization = currentTime - self.initializationTime;
             
-            // Allow the install button to focus if 1.5 or less seconds have passed since initialization
-            allowInstallButtonFocus = (timeElapsedSinceInitialization <= 1500000000ULL);
+            // Allow the install button to focus if 3 or less seconds have passed since initialization
+            allowInstallButtonFocus = (timeElapsedSinceInitialization <= 3000000000ULL);
         } else {
             allowInstallButtonFocus = NO;
         }
     }
-    [self setUpFocusForActiveUpdateAlertAllowingImmediateInstallButtonFocus:allowInstallButtonFocus];
+    [self setUpActiveUpdateAlertRequestingFocus:allowInstallButtonFocus];
 }
 
 - (void)showUpdateReleaseNotesWithDownloadData:(SPUDownloadData *)downloadData
@@ -213,7 +249,7 @@
 - (void)showUpdateInFocus
 {
     if (self.activeUpdateAlert != nil) {
-        [self setUpFocusForActiveUpdateAlertAllowingImmediateInstallButtonFocus:YES];
+        [self setUpActiveUpdateAlertRequestingFocus:YES];
     } else if (self.permissionPrompt != nil) {
         [self.permissionPrompt showWindow:nil];
     } else if (self.statusController != nil) {
@@ -257,7 +293,7 @@
     
     self.checkingController = [[SUStatusController alloc] initWithHost:self.host minimizable:NO];
     [[self.checkingController window] center]; // Force the checking controller to load its window.
-    [self.checkingController beginActionWithTitle:SULocalizedString(@"Checking for updates...", nil) maxProgressValue:0.0 statusText:nil];
+    [self.checkingController beginActionWithTitle:SULocalizedString(@"Checking for updates…", nil) maxProgressValue:0.0 statusText:nil];
     [self.checkingController setButtonTitle:SULocalizedString(@"Cancel", nil) target:self action:@selector(cancelCheckForUpdates:) isDefault:NO];
     [self.checkingController showWindow:self];
     
@@ -360,7 +396,7 @@
             case SPUNoUpdateFoundReasonSystemIsTooNew:
                 if (latestAppcastItem.infoURL != nil) {
                     // Show the user the product's link if available
-                    [alert addButtonWithTitle:SULocalizedString(@"Learn More...", nil)];
+                    [alert addButtonWithTitle:SULocalizedString(@"Learn More…", nil)];
                     
                     secondaryAction = ^{
                         [[NSWorkspace sharedWorkspace] openURL:(NSURL * _Nonnull)latestAppcastItem.infoURL];
@@ -402,7 +438,18 @@
 - (void)createAndShowStatusController
 {
     if (self.statusController == nil) {
-        self.statusController = [[SUStatusController alloc] initWithHost:self.host minimizable:YES];
+        // We will make the status window minimizable for regular app updates which are often
+        // quick and atomic to install on quit. But we won't do this for package based updates.
+        BOOL minimizable;
+        if (!self.regularApplicationUpdate) {
+            minimizable = NO;
+        } else if ([self.delegate respondsToSelector:@selector(standardUserDriverAllowsMinimizableStatusWindow)]) {
+            minimizable = [self.delegate standardUserDriverAllowsMinimizableStatusWindow];
+        } else {
+            minimizable = YES;
+        }
+        
+        self.statusController = [[SUStatusController alloc] initWithHost:self.host minimizable:minimizable];
         [self.statusController showWindow:self];
     }
 }
@@ -415,7 +462,7 @@
     
     [self createAndShowStatusController];
     
-    [self.statusController beginActionWithTitle:SULocalizedString(@"Downloading update...", @"Take care not to overflow the status window.") maxProgressValue:1.0 statusText:nil];
+    [self.statusController beginActionWithTitle:SULocalizedString(@"Downloading update…", @"Take care not to overflow the status window.") maxProgressValue:1.0 statusText:nil];
     [self.statusController setProgressValue:0.0];
     [self.statusController setButtonTitle:SULocalizedString(@"Cancel", nil) target:self action:@selector(cancelDownload:) isDefault:NO];
     
@@ -440,50 +487,23 @@
     }
 }
 
-- (NSString *)localizedStringFromByteCount:(long long)value
-{
-    if (![SUOperatingSystem isOperatingSystemAtLeastVersion:(NSOperatingSystemVersion){10, 8, 0}]) {
-        if (value < 1000) {
-            return [NSString stringWithFormat:@"%.0lf %@", value / 1.0,
-                    SULocalizedString(@"B", @"the unit for bytes")];
-        }
-        
-        if (value < 1000 * 1000) {
-            return [NSString stringWithFormat:@"%.0lf %@", value / 1000.0,
-                    SULocalizedString(@"KB", @"the unit for kilobytes")];
-        }
-        
-        if (value < 1000 * 1000 * 1000) {
-            return [NSString stringWithFormat:@"%.1lf %@", value / 1000.0 / 1000.0,
-                    SULocalizedString(@"MB", @"the unit for megabytes")];
-        }
-        
-        return [NSString stringWithFormat:@"%.2lf %@", value / 1000.0 / 1000.0 / 1000.0,
-                SULocalizedString(@"GB", @"the unit for gigabytes")];
-    }
-    
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wpartial-availability"
-    NSByteCountFormatter *formatter = [[NSByteCountFormatter alloc] init];
-    [formatter setZeroPadsFractionDigits:YES];
-    return [formatter stringFromByteCount:value];
-#pragma clang diagnostic pop
-}
-
 - (void)showDownloadDidReceiveDataOfLength:(uint64_t)length
 {
     assert(NSThread.isMainThread);
-    
+
     self.bytesDownloaded += length;
-    
+
+    NSByteCountFormatter *formatter = [[NSByteCountFormatter alloc] init];
+    [formatter setZeroPadsFractionDigits:YES];
+
     if (self.expectedContentLength > 0.0) {
         double newProgressValue = (double)self.bytesDownloaded / (double)self.expectedContentLength;
         
         [self.statusController setProgressValue:MIN(newProgressValue, 1.0)];
         
-        [self.statusController setStatusText:[NSString stringWithFormat:SULocalizedString(@"%@ of %@", nil), [self localizedStringFromByteCount:(long long)self.bytesDownloaded], [self localizedStringFromByteCount:(long long)MAX(self.bytesDownloaded, self.expectedContentLength)]]];
+        [self.statusController setStatusText:[NSString stringWithFormat:SULocalizedString(@"%@ of %@", @"The download progress in units of bytes, e.g. 100 KB of 1,0 MB"), [formatter stringFromByteCount:(long long)self.bytesDownloaded], [formatter stringFromByteCount:(long long)MAX(self.bytesDownloaded, self.expectedContentLength)]]];
     } else {
-        [self.statusController setStatusText:[NSString stringWithFormat:SULocalizedString(@"%@ downloaded", nil), [self localizedStringFromByteCount:(long long)self.bytesDownloaded]]];
+        [self.statusController setStatusText:[NSString stringWithFormat:SULocalizedString(@"%@ downloaded", @"The download progress in a unit of bytes, e.g. 100 KB"), [formatter stringFromByteCount:(long long)self.bytesDownloaded]]];
     }
 }
 
@@ -494,7 +514,7 @@
     self.cancellation = nil;
     
     [self createAndShowStatusController];
-    [self.statusController beginActionWithTitle:SULocalizedString(@"Extracting update...", @"Take care not to overflow the status window.") maxProgressValue:1.0 statusText:nil];
+    [self.statusController beginActionWithTitle:SULocalizedString(@"Extracting update…", @"Take care not to overflow the status window.") maxProgressValue:1.0 statusText:nil];
     [self.statusController setProgressValue:0.0];
     [self.statusController setButtonTitle:SULocalizedString(@"Cancel", nil) target:nil action:nil isDefault:NO];
     [self.statusController setButtonEnabled:NO];
@@ -512,7 +532,7 @@
     assert(NSThread.isMainThread);
     
     if (applicationTerminated) {
-        [self.statusController beginActionWithTitle:SULocalizedString(@"Installing update...", @"Take care not to overflow the status window.") maxProgressValue:0.0 statusText:nil];
+        [self.statusController beginActionWithTitle:SULocalizedString(@"Installing update…", @"Take care not to overflow the status window.") maxProgressValue:0.0 statusText:nil];
         [self.statusController setButtonEnabled:NO];
     } else {
         // The "quit" event can always be canceled or delayed by the application we're updating
@@ -552,7 +572,7 @@
         }
         
         if (hostVersion != nil) {
-            alert.informativeText = [NSString stringWithFormat:SULocalizedString(@"%@ is now updated to version %@!", nil), hostName, hostVersion];
+            alert.informativeText = [NSString stringWithFormat:SULocalizedString(@"%@ is now updated to version %@!", nil), hostName, hostVersion];
         } else {
             alert.informativeText = [NSString stringWithFormat:SULocalizedString(@"%@ is now updated!", nil), hostName];
         }
@@ -589,6 +609,7 @@
     }
     
     [self _removeApplicationBecomeActiveObserver];
+    [self _removeScheduledUpdateAlertAfterDelay];
 }
 
 @end
