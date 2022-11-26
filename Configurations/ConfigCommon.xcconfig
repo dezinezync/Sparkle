@@ -42,13 +42,13 @@ SPARKLE_ICON_NAME = AppIcon
 // If you change any of these version details, you must increase CURRENT_PROJECT_VERSION
 // These variables must have a space after the '=' too
 SPARKLE_VERSION_MAJOR = 2
-SPARKLE_VERSION_MINOR = 1
+SPARKLE_VERSION_MINOR = 4
 SPARKLE_VERSION_PATCH = 0
 
 // This should be in SemVer format or empty, ie. "-beta.1"
 // These variables must have a space after the '=' too
 SPARKLE_VERSION_SUFFIX =
-CURRENT_PROJECT_VERSION = 2013
+CURRENT_PROJECT_VERSION = 2022
 
 MARKETING_VERSION = $(SPARKLE_VERSION_MAJOR).$(SPARKLE_VERSION_MINOR).$(SPARKLE_VERSION_PATCH)$(SPARKLE_VERSION_SUFFIX)
 ALWAYS_SEARCH_USER_PATHS = NO
@@ -56,7 +56,7 @@ ENABLE_STRICT_OBJC_MSGSEND = YES
 GCC_SYMBOLS_PRIVATE_EXTERN = YES
 GCC_INLINES_ARE_PRIVATE_EXTERN = YES
 ARCHS = $(ARCHS_STANDARD)
-MACOSX_DEPLOYMENT_TARGET = 10.11
+MACOSX_DEPLOYMENT_TARGET = 10.13
 PRODUCT_NAME = ${TARGET_NAME}
 PRODUCT_BUNDLE_IDENTIFIER = org.sparkle-project.Sparkle.${PRODUCT_NAME:rfc1034identifier}
 
@@ -118,4 +118,4 @@ GCC_WARN_UNUSED_VARIABLE = YES
 WARNING_CFLAGS_EXTRA = -Wno-custom-atomic-properties -Wno-implicit-atomic-properties
 
 // Turn on all warnings, then disable a few which are almost impossible to avoid
-WARNING_CFLAGS = -Wall -Weverything -Wno-unused-macros -Wno-gnu-statement-expression -Wno-arc-repeated-use-of-weak -Wno-auto-import -Wno-gnu-zero-variadic-macro-arguments -Wno-format-non-iso $(WARNING_CFLAGS_EXTRA)
+WARNING_CFLAGS = -Wall -Weverything -Wno-unused-macros -Wno-gnu-statement-expression -Wno-arc-repeated-use-of-weak -Wno-auto-import -Wno-gnu-zero-variadic-macro-arguments -Wno-format-non-iso -Wno-direct-ivar-access $(WARNING_CFLAGS_EXTRA)

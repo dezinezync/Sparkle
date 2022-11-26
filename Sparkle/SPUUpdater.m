@@ -32,6 +32,7 @@
 #import "SPUResumableUpdate.h"
 #import "SUSignatures.h"
 #import "SPUUserAgent+Private.h"
+#import "SPUGentleUserDriverReminders.h"
 
 
 #include "AppKitPrevention.h"
@@ -94,11 +95,14 @@ NSString *const SUUpdaterAppcastNotificationKey = @"SUUpdaterAppCastNotification
 @synthesize loggedNoSecureKeyWarning = _loggedNoSecureKeyWarning;
 
 #if DEBUG
-+ (void)load
++ (void)initialize
 {
-    // We're using NSLog instead of SULog here because we don't want to start Sparkle's logger here,
-    // and because this is not really an error, just a warning notice
-    NSLog(@"WARNING: This is running a Debug build of Sparkle 2; don't use this in production!");
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        // We're using NSLog instead of SULog here because we don't want to start Sparkle's logger here,
+        // and because this is not really an error, just a warning notice
+        NSLog(@"WARNING: This is running a Debug build of Sparkle 2; don't use this in production!");
+    });
 }
 #endif
 
@@ -164,6 +168,10 @@ NSString *const SUUpdaterAppcastNotificationKey = @"SUUpdaterAppCastNotification
     
     if (![self checkIfConfiguredProperlyAndRequireFeedURL:NO validateXPCServices:YES error:error]) {
         return NO;
+    }
+    
+    if ([self.userDriver respondsToSelector:@selector(resetTimeSinceOpportuneUpdateNotice)]) {
+        [(id<SPUGentleUserDriverReminders>)self.userDriver resetTimeSinceOpportuneUpdateNotice];
     }
     
     self.startedUpdater = YES;
@@ -339,10 +347,11 @@ NSString *const SUUpdaterAppcastNotificationKey = @"SUUpdaterAppCastNotification
         }
     } else if (publicKeys.ed25519PubKey == nil) {
         // No EdDSA key is available, so app must be using DSA
-        if (updatingMainBundle && !self.loggedNoSecureKeyWarning) {
-            SULog(SULogLevelError, @"Error: Serving updates without an EdDSA key is insecure and deprecated. DSA support may be removed in a future Sparkle release. Please migrate to using EdDSA (ed25519). Visit Sparkle's documentation for migration information: https://sparkle-project.org/documentation/#3-segue-for-security-concerns");
-            
-            self.loggedNoSecureKeyWarning = YES;
+        if (updatingMainBundle) {
+            if (error != NULL) {
+                *error = [NSError errorWithDomain:SUSparkleErrorDomain code:SUNoPublicDSAFoundError userInfo:@{ NSLocalizedDescriptionKey: [NSString stringWithFormat:@"For security reasons, updates need to be signed with an EdDSA key for %@. Please migrate to using EdDSA (ed25519). Visit Sparkle's documentation for migration information: https://sparkle-project.org/documentation/#3-segue-for-security-concerns.", hostName] }];
+            }
+            return NO;
         }
     }
     
@@ -443,7 +452,7 @@ NSString *const SUUpdaterAppcastNotificationKey = @"SUUpdaterAppCastNotification
 {
     [self.updaterTimer invalidate];
     
-    if (![self automaticallyChecksForUpdates]) {
+    if (!firingImmediately && ![self automaticallyChecksForUpdates]) {
         if ([self.delegate respondsToSelector:@selector(updaterWillNotScheduleUpdateCheck:)]) {
             [self.delegate updaterWillNotScheduleUpdateCheck:self];
         }
@@ -510,6 +519,11 @@ NSString *const SUUpdaterAppcastNotificationKey = @"SUUpdaterAppCastNotification
                 if ([self.delegate respondsToSelector:@selector(updater:willScheduleUpdateCheckAfterDelay:)]) {
                     [self.delegate updater:self willScheduleUpdateCheckAfterDelay:delayUntilCheck];
                 }
+                
+                if ([self.userDriver respondsToSelector:@selector(logGentleScheduledUpdateReminderWarningIfNeeded)]) {
+                    [(id<SPUGentleUserDriverReminders>)self.userDriver logGentleScheduledUpdateReminderWarningIfNeeded];
+                }
+                
                 [self.updaterTimer startAndFireAfterDelay:delayUntilCheck];
             } else {
                 // We're overdue! Run one now.
@@ -755,6 +769,10 @@ NSString *const SUUpdaterAppcastNotificationKey = @"SUUpdaterAppCastNotification
         weakSelf.canCheckForUpdates = YES;
     }];
     
+    [self.driver setUpdateWillInstallHandler:^{
+        [weakSelf updateLastUpdateCheckDate];
+    }];
+    
     if (installerInProgress) {
         // Resume an update that has already begun installing in the background
         [self.driver resumeInstallingUpdate];
@@ -787,6 +805,12 @@ NSString *const SUUpdaterAppcastNotificationKey = @"SUUpdaterAppCastNotification
     if (!self.startedUpdater) {
         SULog(SULogLevelError, @"Error: resetUpdateCycle - updater hasn't been started yet. Please call -startUpdater: first");
         return; // not even ready yet
+    }
+    
+    // Note this resets the opportune time when user grants Sparkle permission to check for updates
+    // and when the user changes preferences on automatically checking for updates or the update time check interval
+    if ([self.userDriver respondsToSelector:@selector(resetTimeSinceOpportuneUpdateNotice)]) {
+        [(id<SPUGentleUserDriverReminders>)self.userDriver resetTimeSinceOpportuneUpdateNotice];
     }
     
     if (!self.sessionInProgress) {
